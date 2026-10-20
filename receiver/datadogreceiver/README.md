@@ -175,7 +175,10 @@ Traces in the v1 format can arrive in two ways:
   [`traces.enable_v1_endpoint`](#tracesenable_v1_endpoint-optional) option.
 - Forwarded by a Datadog Agent that received them from tracers in the v1 format. The agent sends them to
   `/api/v0.2/traces` (for example when the receiver is an `apm_config.additional_endpoints` target) in a separate field
-  of its payload. The receiver always reads that field, so this needs no option.
+  of its payload. The receiver always reads that field, so this needs no option. Since version 7.84.0 the agent also
+  converts traces from tracers on older protocols to the v1 format by default, so these arrive this way too. Their
+  attributes stay strings and doubles, and the receiver restores the span links, span events and span kind that the
+  conversion loses.
 
 ### Datadog's API support
 

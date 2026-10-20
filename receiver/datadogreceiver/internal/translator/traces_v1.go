@@ -14,11 +14,16 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	conventions "go.opentelemetry.io/otel/semconv/v1.40.0"
+	"go.uber.org/zap"
 )
 
+// attributeConvertedV1 is set by the Datadog Agent on the spans it converts from the v0.x formats to the v1 format.
+const attributeConvertedV1 = "_dd.convertedv1"
+
 // ToTracesV1 converts a tracer payload in the v1 format to OTel traces. Attributes keep their native types and the
-// 128-bit trace id is taken from the trace chunk as is.
-func ToTracesV1(payload *idx.InternalTracerPayload, req *http.Request) (traces ptrace.Traces, err error) {
+// 128-bit trace id is taken from the trace chunk as is. Spans that the agent converted from the v0.x formats are
+// uplifted to what the v0.x translation produces for them, where the conversion lost that information.
+func ToTracesV1(logger *zap.Logger, payload *idx.InternalTracerPayload, req *http.Request) (traces ptrace.Traces, err error) {
 	// Payloads that were not decoded from the wire (agent payloads) can reference strings that do not exist.
 	defer func() {
 		if r := recover(); r != nil {
@@ -99,6 +104,7 @@ func ToTracesV1(payload *idx.InternalTracerPayload, req *http.Request) (traces p
 			}
 			putV1Attributes(attrs, span.Attributes(), strs, true)
 
+			_, converted := span.GetAttributeAsString(attributeConvertedV1)
 			switch span.Kind() {
 			case idx.SpanKind_SPAN_KIND_SERVER:
 				newSpan.SetKind(ptrace.SpanKindServer)
@@ -110,15 +116,12 @@ func ToTracesV1(payload *idx.InternalTracerPayload, req *http.Request) (traces p
 				newSpan.SetKind(ptrace.SpanKindConsumer)
 			case idx.SpanKind_SPAN_KIND_INTERNAL:
 				newSpan.SetKind(ptrace.SpanKindInternal)
-			default:
-				switch span.Type() {
-				case "web":
-					newSpan.SetKind(ptrace.SpanKindServer)
-				case "http":
-					newSpan.SetKind(ptrace.SpanKindClient)
-				default:
-					newSpan.SetKind(ptrace.SpanKindUnspecified)
+				// The agent sets internal on converted spans that have no span.kind, so the span type is more telling.
+				if kind := kindFromType(span.Type()); converted && kind != ptrace.SpanKindUnspecified {
+					newSpan.SetKind(kind)
 				}
+			default:
+				newSpan.SetKind(kindFromType(span.Type()))
 			}
 
 			// For client/producer/consumer spans, if we have `peer.hostname`, and `server.address` is unset, set
@@ -150,6 +153,10 @@ func ToTracesV1(payload *idx.InternalTracerPayload, req *http.Request) (traces p
 				putV1Attributes(event.Attributes(), e.Attributes(), strs, false)
 			}
 
+			if converted {
+				upliftConvertedSpan(logger, newSpan, len(span.Links()) > 0, len(span.Events()) > 0)
+			}
+
 			var errCode int32
 			if span.Error() {
 				errCode = 1
@@ -172,6 +179,41 @@ func ToTracesV1(payload *idx.InternalTracerPayload, req *http.Request) (traces p
 		spans.CopyTo(in.Spans())
 	}
 	return results, nil
+}
+
+func kindFromType(spanType string) ptrace.SpanKind {
+	switch spanType {
+	case "web":
+		return ptrace.SpanKindServer
+	case "http":
+		return ptrace.SpanKindClient
+	default:
+		return ptrace.SpanKindUnspecified
+	}
+}
+
+// upliftConvertedSpan turns the span links and events that the agent left as JSON tags when it converted a span from
+// the v0.x formats into OTel span links and events, like the v0.x translation does. The tags are removed from the
+// span. Native links and events take precedence.
+func upliftConvertedSpan(logger *zap.Logger, span ptrace.Span, hasNativeLinks, hasNativeEvents bool) {
+	attrs := span.Attributes()
+	if raw, ok := attrs.Get("_dd.span_links"); ok {
+		if !hasNativeLinks {
+			if err := metaSpanLinks(raw.AsString(), span.Links()); err != nil {
+				logger.Error("error parsing _dd.span_links", zap.Error(err))
+			}
+		}
+		attrs.Remove("_dd.span_links")
+	}
+	if raw, ok := attrs.Get("events"); ok {
+		if !hasNativeEvents {
+			if err := metaSpanEvents(raw.AsString(), span.Events()); err != nil {
+				logger.Error("error parsing span events", zap.Error(err))
+			}
+		}
+		attrs.Remove("events")
+	}
+	attrs.Remove("_dd.span_events.has_exception")
 }
 
 // chunkTraceID returns the 128-bit trace id of a chunk. A shorter id is treated as if the missing high-order bytes were zero.

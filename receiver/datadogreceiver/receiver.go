@@ -502,7 +502,7 @@ func (ddr *datadogReceiver) handleTraces(w http.ResponseWriter, req *http.Reques
 		}
 	}
 	for _, v1Trace := range payloads.V1 {
-		otelTraces, err := translator.ToTracesV1(v1Trace, req)
+		otelTraces, err := translator.ToTracesV1(ddr.params.Logger, v1Trace, req)
 		if err != nil {
 			ddr.params.Logger.Error("Error converting v1 traces", zap.Error(err))
 			continue
