@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Orb setup for opentelemetry-collector-contrib.
+# Installs the Go toolchain required by go.mod and warms the module and build caches
+# for the repo's `go tool` based tooling (internal/tools) and the core modules.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+step() { printf '\n==> %s (%s)\n' "$1" "$(date +%T)"; }
+
+# --- System packages (make and gcc are needed by the Makefile and `-race` tests) ---
+step "System packages"
+missing=()
+for pkg in build-essential git curl ca-certificates; do
+  dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+fi
+
+# --- Go toolchain: same minor version as go.mod, latest patch release ---
+step "Go toolchain"
+go_mod_version="$(awk '/^go /{print $2; exit}' go.mod)"   # e.g. 1.26.0
+go_minor="${go_mod_version%.*}"                            # e.g. 1.26
+have_version=""
+if [ -x /usr/local/go/bin/go ]; then
+  have_version="$(/usr/local/go/bin/go env GOVERSION 2>/dev/null || true)"
+fi
+# Keep an installed toolchain of the right minor version; setup reruns stay offline.
+if [[ "$have_version" != go${go_minor}.* ]] \
+   || [ "$(printf '%s\n' "${go_mod_version}" "${have_version#go}" | sort -V | head -n1)" != "$go_mod_version" ]; then
+  go_full="$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' \
+    | jq -r --arg m "go${go_minor}." '[.[].version | select(startswith($m))] | map(select(test("^go[0-9.]+$"))) | sort_by(ltrimstr("go") | split(".") | map(tonumber)) | last')"
+  case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "unsupported arch" >&2; exit 1 ;; esac
+  echo "Installing ${go_full} (linux-${arch})"
+  tmp="$(mktemp -d)"
+  curl -fsSL "https://go.dev/dl/${go_full}.linux-${arch}.tar.gz" -o "$tmp/go.tgz"
+  sudo rm -rf /usr/local/go
+  sudo tar -C /usr/local -xzf "$tmp/go.tgz"
+  rm -rf "$tmp"
+fi
+# /usr/local/bin is on PATH for every shell, including non-login and supervised processes.
+for bin in go gofmt; do
+  sudo ln -sf "/usr/local/go/bin/$bin" "/usr/local/bin/$bin"
+done
+export PATH="/usr/local/go/bin:$PATH"
+go version
+
+# --- Module cache for the repo tooling and core modules ---
+# Dependency downloads are cheap on a warm module cache. Only the modules below are
+# warmed; the other ~350 modules download on demand when first built or tested.
+step "Download modules"
+for mod in internal/tools pkg/ottl; do
+  ( cd "$mod" && time go mod download )
+done
+
+# --- Repo tooling (Makefile.Common runs these through `go tool -modfile=internal/tools/go.mod`) ---
+# `go tool -n` builds the tool into the build cache and prints its path.
+step "Build Go tools"
+for tool in \
+  gotest.tools/gotestsum \
+  github.com/golangci/golangci-lint/v2/cmd/golangci-lint \
+  go.opentelemetry.io/collector/cmd/mdatagen \
+  go.opentelemetry.io/build-tools/chloggen \
+  go.opentelemetry.io/build-tools/crosslink \
+  golang.org/x/tools/cmd/goimports \
+  mvdan.cc/gofumpt
+do
+  ( time GOOS= GOARCH= go tool -modfile=internal/tools/go.mod -n "$tool" >/dev/null )
+done
+
+# --- Warm the build cache for a representative component ---
+step "Build cache"
+( cd pkg/ottl && time go test -count=1 -run XXX_NO_TESTS ./... >/dev/null )
+
+step "Setup complete"
