@@ -154,7 +154,8 @@ For chunks that Datadog kept by rate (sampling priority 1), the receiver records
 `ot` member of the W3C tracestate of their spans, for example `ot=th:8` for a rate of 0.5. Components such as the
 `spanmetrics` connector can then extrapolate counts from the spans that were kept.
 
-The rate is read from the tags that Datadog puts on the spans of a chunk, in this order: `_dd.agent_psr`,
+This applies to all trace endpoints, including the v1 format. The rate is read from the tags that Datadog puts on the
+spans of a chunk (in the v1 format also from the attributes of the chunk), in this order: `_dd.agent_psr`,
 `_dd.p.ksr`, and `_dd.rule_psr` multiplied by `_dd.limit_psr`. Every chunk of a trace that is flushed in parts is
 handled by itself. Chunks that were kept by the user (priority 2), or that were dropped by the sampler and then
 rescued, were not decided by a rate, so their spans have no threshold.
