@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	pb "github.com/DataDog/datadog-agent/pkg/proto/pbgo/trace"
+	"github.com/DataDog/datadog-agent/pkg/proto/pbgo/trace/idx"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.uber.org/zap"
 
@@ -72,26 +73,53 @@ func (lookup rateLookup) rate() (samplingRate, bool) {
 	return samplingRate{}, false
 }
 
-// chunkSamplingRate returns the best sampling rate in a chunk. The tags are spread over the spans of a chunk, so a
-// chunk has one rate, which is the most exact one of any of them. The legacy formats send the tags as span metrics,
+// bestRate collects the most exact sampling rate of the tags in a chunk. The tags are spread over the spans of a chunk,
+// so a chunk has one rate, which is the most exact one of any of them.
+type bestRate struct {
+	rate samplingRate
+}
+
+func (b *bestRate) consider(lookup rateLookup) {
+	if r, ok := lookup.rate(); ok && r.source > b.rate.source {
+		b.rate = r
+	}
+}
+
+func (b *bestRate) probability() (float64, bool) {
+	return b.rate.probability, b.rate.source != 0
+}
+
+// chunkSamplingRate returns the sampling rate of a chunk in the legacy formats, which send the tags as span metrics,
 // span meta or, in the v0.7 format, as tags of the chunk.
 func chunkSamplingRate(chunk *pb.TraceChunk) (float64, bool) {
-	var best samplingRate
-	consider := func(lookup rateLookup) {
-		if r, ok := lookup.rate(); ok && r.source > best.source {
-			best = r
-		}
-	}
-	consider(func(key string) (float64, bool) { return parseRate(chunk.GetTags()[key]) })
+	var best bestRate
+	best.consider(func(key string) (float64, bool) { return parseRate(chunk.GetTags()[key]) })
 	for _, span := range chunk.GetSpans() {
-		consider(func(key string) (float64, bool) {
+		best.consider(func(key string) (float64, bool) {
 			if v, ok := span.Metrics[key]; ok {
 				return v, true
 			}
 			return parseRate(span.Meta[key])
 		})
 	}
-	return best.probability, best.source != 0
+	return best.probability()
+}
+
+// chunkSamplingRateV1 returns the sampling rate of a chunk in the v1 format, from the attributes of the chunk and of
+// its spans. An attribute can be a number or a string, like the tags of the legacy formats.
+func chunkSamplingRateV1(chunk *idx.InternalTraceChunk) (float64, bool) {
+	var best bestRate
+	best.consider(func(key string) (float64, bool) {
+		v, ok := chunk.GetAttributeAsString(key)
+		if !ok {
+			return 0, false
+		}
+		return parseRate(v)
+	})
+	for _, span := range chunk.Spans {
+		best.consider(span.GetAttributeAsFloat64)
+	}
+	return best.probability()
 }
 
 func parseRate(s string) (float64, bool) {
