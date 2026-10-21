@@ -248,6 +248,7 @@ func traceChunkSamplingPriority(traceChunk *pb.TraceChunk) (float64, bool) {
 	return 0, false
 }
 
+// The spans of chunks that Datadog kept by rate get that rate as the threshold in their tracestate.
 func ToTraces(logger *zap.Logger, payload *pb.TracerPayload, req *http.Request, traceIDCache *lru.Cache[uint64, pcommon.TraceID]) (ptrace.Traces, error) {
 	sharedAttributes := pcommon.NewMap()
 	for k, v := range map[string]string{
@@ -297,6 +298,11 @@ func ToTraces(logger *zap.Logger, payload *pb.TracerPayload, req *http.Request, 
 
 	for _, traceChunk := range payload.GetChunks() {
 		samplingPriority, hasSamplingPriority := traceChunkSamplingPriority(traceChunk)
+		var rate float64
+		var hasRate bool
+		if hasSamplingPriority && samplingPriority == priorityAutoKeep {
+			rate, hasRate = chunkSamplingRate(traceChunk)
+		}
 		for _, span := range traceChunk.GetSpans() {
 			// Restore base service name as the service name.
 			// Without this, internal spans such as postgresql queries have a service.name set to postgresql
@@ -390,6 +396,10 @@ func ToTraces(logger *zap.Logger, payload *pb.TracerPayload, req *http.Request, 
 
 			// Some spans need specific processing (http, db, grpc...)
 			processSpanByName(span, &newSpan)
+
+			if hasRate {
+				setSamplingThreshold(logger, newSpan, rate)
+			}
 		}
 	}
 
