@@ -148,6 +148,23 @@ Tags not in this format will be given an `unnamed_` prefix when added to the att
 By default, multiple tags for the same data point with the same `key:` prefix will only have the last tag retained (e.g. `["env:a","env:b"]` will be converted to `{env = b}`).
 If the `receiver.datadogreceiver.EnableMultiTagParsing` feature gate is enabled, multiple tags with the same key will instead be stored as a slice (e.g. `["env:a","env:b"]` will be converted to `{env = [a,b]}`).
 
+### Sampling Threshold
+
+For chunks that Datadog kept by rate (sampling priority 1), the receiver records the rate as the `th` threshold in the
+`ot` member of the W3C tracestate of their spans, for example `ot=th:8` for a rate of 0.5. Components such as the
+`spanmetrics` connector can then extrapolate counts from the spans that were kept.
+
+The rate is read from the tags that Datadog puts on the spans of a chunk, in this order: `_dd.agent_psr`,
+`_dd.p.ksr`, and `_dd.rule_psr` multiplied by `_dd.limit_psr`. Every chunk of a trace that is flushed in parts is
+handled by itself. Chunks that were kept by the user (priority 2), or that were dropped by the sampler and then
+rescued, were not decided by a rate, so their spans have no threshold.
+
+If the tracestate of a span already has a threshold, it is the probability of the earlier sampling stages. The rate of
+Datadog is then multiplied with it, as the
+[tracestate probability sampling specification](https://opentelemetry.io/docs/specs/otel/trace/tracestate-probability-sampling/)
+describes for a downstream sampler. A threshold that is inconsistent with the explicit randomness (`rv`) of the span
+is erased, because its probability is unknown. The other members of the tracestate are kept.
+
 ### Default Attributes
 
 - `dd.span.Resource`: The datadog resource name (as distinct from the span name)
