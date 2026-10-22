@@ -56,7 +56,7 @@ func ToTracesV1(logger *zap.Logger, payload *idx.InternalTracerPayload, req *htt
 		traceID := chunkTraceID(chunk)
 		var rate float64
 		var hasRate bool
-		if chunk.Priority == priorityAutoKeep {
+		if decidedByRate(float64(chunk.Priority), func() (uint32, bool) { return chunk.SamplingMechanism(), true }) {
 			rate, hasRate = chunkSamplingRateV1(chunk)
 		}
 		for _, span := range chunk.Spans {
