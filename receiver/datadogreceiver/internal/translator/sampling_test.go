@@ -118,6 +118,45 @@ func TestToTracesSamplingThreshold(t *testing.T) {
 			want: map[uint64]string{1: "", 2: ""},
 		},
 		{
+			name: "a user keep by a sampling rule of the tracer is decided by its rate",
+			chunks: []*pb.TraceChunk{chunk(int32(ddsampler.PriorityUserKeep),
+				&pb.Span{Metrics: map[string]float64{"_dd.rule_psr": 0.5}, Meta: map[string]string{"_dd.p.dm": "-3"}}, &pb.Span{})},
+			want: map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
+		},
+		{
+			name: "the limit of a tracer that sets the configured limit instead of a rate is ignored",
+			chunks: []*pb.TraceChunk{chunk(int32(ddsampler.PriorityUserKeep),
+				&pb.Span{Metrics: map[string]float64{"_dd.rule_psr": 0.5, "_dd.limit_psr": 100}, Meta: map[string]string{"_dd.p.dm": "-3"}}, &pb.Span{})},
+			want: map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
+		},
+		{
+			name: "the decision maker can be a tag of the chunk",
+			chunks: []*pb.TraceChunk{func() *pb.TraceChunk {
+				c := chunk(int32(ddsampler.PriorityUserKeep), &pb.Span{Metrics: map[string]float64{"_dd.rule_psr": 0.5}}, &pb.Span{})
+				c.Tags = map[string]string{"_dd.p.dm": "-11"}
+				return c
+			}()},
+			want: map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
+		},
+		{
+			name: "a manual keep is not decided by a rate, even when it has one",
+			chunks: []*pb.TraceChunk{chunk(int32(ddsampler.PriorityUserKeep),
+				&pb.Span{Metrics: map[string]float64{"_dd.agent_psr": 0.5}, Meta: map[string]string{"_dd.p.dm": "-4"}}, &pb.Span{})},
+			want: map[uint64]string{1: "", 2: ""},
+		},
+		{
+			name: "a drop is not decided by a rate, whatever the decision maker",
+			chunks: []*pb.TraceChunk{chunk(int32(ddsampler.PriorityUserDrop),
+				&pb.Span{Metrics: map[string]float64{"_dd.rule_psr": 0.5}, Meta: map[string]string{"_dd.p.dm": "-3"}}, &pb.Span{})},
+			want: map[uint64]string{1: "", 2: ""},
+		},
+		{
+			name: "the rate of the probabilistic sampler of the Agent",
+			chunks: []*pb.TraceChunk{chunk(keep,
+				&pb.Span{Metrics: map[string]float64{"_dd.prob_sr": 0.25}, Meta: map[string]string{"_dd.p.dm": "-9"}}, &pb.Span{})},
+			want: map[uint64]string{1: "ot=th:c", 2: "ot=th:c"},
+		},
+		{
 			name: "a dropped chunk, kept for its error, is not decided by a rate",
 			chunks: []*pb.TraceChunk{chunk(int32(ddsampler.PriorityAutoDrop),
 				&pb.Span{Metrics: map[string]float64{"_dd.agent_psr": 0.5}}, &pb.Span{})},

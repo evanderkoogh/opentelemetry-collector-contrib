@@ -300,7 +300,7 @@ func ToTraces(logger *zap.Logger, payload *pb.TracerPayload, req *http.Request, 
 		samplingPriority, hasSamplingPriority := traceChunkSamplingPriority(traceChunk)
 		var rate float64
 		var hasRate bool
-		if hasSamplingPriority && samplingPriority == priorityAutoKeep {
+		if hasSamplingPriority && decidedByRate(samplingPriority, func() (uint32, bool) { return chunkMechanism(traceChunk) }) {
 			rate, hasRate = chunkSamplingRate(traceChunk)
 		}
 		for _, span := range traceChunk.GetSpans() {
