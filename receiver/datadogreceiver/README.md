@@ -150,15 +150,21 @@ If the `receiver.datadogreceiver.EnableMultiTagParsing` feature gate is enabled,
 
 ### Sampling Threshold
 
-For chunks that Datadog kept by rate (sampling priority 1), the receiver records the rate as the `th` threshold in the
+For chunks that Datadog kept because of a sampling rate, the receiver records that rate as the `th` threshold in the
 `ot` member of the W3C tracestate of their spans, for example `ot=th:8` for a rate of 0.5. Components such as the
 `spanmetrics` connector can then extrapolate counts from the spans that were kept.
 
+A chunk is kept because of a rate when its sampling priority is 1. A tracer also keeps the traces that match one of its
+sampling rules with priority 2, which it also uses for traces that a user forced to be kept. The decision maker
+(`_dd.p.dm`) tells them apart: priority 2 chunks only get a threshold when the decision maker is a rate or a rule, not
+for a manual keep or AppSec. Chunks that were dropped (priority 0 or less, including the ones that the sampler rescued
+because of an error) and chunks without a priority were not decided by a rate, so their spans have no threshold.
+
 This applies to all trace endpoints, including the v1 format. The rate is read from the tags that Datadog puts on the
-spans of a chunk (in the v1 format also from the attributes of the chunk), in this order: `_dd.agent_psr`,
-`_dd.p.ksr`, and `_dd.rule_psr` multiplied by `_dd.limit_psr`. Every chunk of a trace that is flushed in parts is
-handled by itself. Chunks that were kept by the user (priority 2), or that were dropped by the sampler and then
-rescued, were not decided by a rate, so their spans have no threshold.
+spans of a chunk (in the v1 format also from the attributes of the chunk), in this order: `_dd.agent_psr` or
+`_dd.prob_sr` (the rate of the probabilistic sampler of the Agent), `_dd.p.ksr`, and `_dd.rule_psr` multiplied by
+`_dd.limit_psr`. A `_dd.limit_psr` above 1 is not a rate, and is ignored. Every chunk of a trace that is flushed in
+parts is handled by itself.
 
 If the tracestate of a span already has a threshold, it is the probability of the earlier sampling stages. The rate of
 Datadog is then multiplied with it, as the

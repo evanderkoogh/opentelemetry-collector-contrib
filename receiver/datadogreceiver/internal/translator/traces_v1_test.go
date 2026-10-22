@@ -109,12 +109,13 @@ func TestToTracesV1SamplingThreshold(t *testing.T) {
 	}
 	// A chunk of a deciding root (span 1) and a child (span 2), like TestToTracesSamplingThreshold.
 	tests := []struct {
-		name     string
-		priority int32
-		chunk    attrs
-		root     attrs
-		child    attrs
-		want     map[uint64]string
+		name      string
+		priority  int32
+		mechanism uint32
+		chunk     attrs
+		root      attrs
+		child     attrs
+		want      map[uint64]string
 	}{
 		{
 			name:     "the agent rate is preferred over the Knuth rate on another span",
@@ -158,6 +159,34 @@ func TestToTracesV1SamplingThreshold(t *testing.T) {
 			priority: int32(ddsampler.PriorityUserKeep),
 			root:     attrs{numbers: map[string]float64{"_dd.agent_psr": 0.5}},
 			want:     map[uint64]string{1: "", 2: ""},
+		},
+		{
+			name:      "a user keep by a sampling rule of the tracer is decided by its rate",
+			priority:  int32(ddsampler.PriorityUserKeep),
+			mechanism: 3,
+			root:      attrs{numbers: map[string]float64{"_dd.rule_psr": 0.5, "_dd.limit_psr": 100}},
+			want:      map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
+		},
+		{
+			name:      "a manual keep is not decided by a rate, even when it has one",
+			priority:  int32(ddsampler.PriorityUserKeep),
+			mechanism: 4,
+			root:      attrs{numbers: map[string]float64{"_dd.agent_psr": 0.5}},
+			want:      map[uint64]string{1: "", 2: ""},
+		},
+		{
+			name:      "a drop is not decided by a rate, whatever the decision maker",
+			priority:  int32(ddsampler.PriorityUserDrop),
+			mechanism: 3,
+			root:      attrs{numbers: map[string]float64{"_dd.rule_psr": 0.5}},
+			want:      map[uint64]string{1: "", 2: ""},
+		},
+		{
+			name:      "the rate of the probabilistic sampler of the Agent",
+			priority:  int32(ddsampler.PriorityAutoKeep),
+			mechanism: 9,
+			root:      attrs{numbers: map[string]float64{"_dd.prob_sr": 0.25}},
+			want:      map[uint64]string{1: "ot=th:c", 2: "ot=th:c"},
 		},
 		{
 			name:     "a dropped chunk, kept for its error, is not decided by a rate",
@@ -204,7 +233,7 @@ func TestToTracesV1SamplingThreshold(t *testing.T) {
 			spans := []*idx.InternalSpan{newSpan(2, 1, tt.child), newSpan(1, 0, tt.root)}
 			payload := &idx.InternalTracerPayload{
 				Strings: strs,
-				Chunks:  []*idx.InternalTraceChunk{idx.NewInternalTraceChunk(strs, tt.priority, "", chunkAttrs, spans, false, make([]byte, 16), 0)},
+				Chunks:  []*idx.InternalTraceChunk{idx.NewInternalTraceChunk(strs, tt.priority, "", chunkAttrs, spans, false, make([]byte, 16), tt.mechanism)},
 			}
 
 			traces, err := ToTracesV1(zap.NewNop(), payload, &http.Request{Header: http.Header{}})
