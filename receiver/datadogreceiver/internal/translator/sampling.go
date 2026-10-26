@@ -22,8 +22,8 @@ const (
 	keyKnuthRate = "_dd.p.ksr"
 	// The rate of the Datadog Agent's own probabilistic sampler, as a fraction. It is exact, and only on the root.
 	keyProbabilisticRate = "_dd.prob_sr"
-	// The rate of the tracer's sampling rule, and the rate of the limiter that applies to it. Some tracers set the
-	// limit tag to the configured limit per second instead of a rate. That is above 1, so it is ignored.
+	// The rate of the tracer's sampling rule, and the effective rate of the limiter that applies to it. dd-trace-java
+	// sets the limit tag to the configured limit per second instead of a rate. That is above 1, so it is ignored.
 	keyRulePSR  = "_dd.rule_psr"
 	keyLimitPSR = "_dd.limit_psr"
 	// The decision maker: the mechanism that made the sampling decision, written as a negative number like "-3".
@@ -81,90 +81,71 @@ func chunkMechanism(chunk *pb.TraceChunk) (uint32, bool) {
 	return 0, false
 }
 
-// rateSource is how well a rate approximates the probability that Datadog sampled the trace with. A higher source is
-// a better estimate.
-type rateSource int
-
-const (
-	sourceRule rateSource = iota + 1
-	sourceKnuth
-	sourceAgent
-)
-
 // rateLookup returns the numeric value of a Datadog sampling tag.
 type rateLookup func(key string) (float64, bool)
 
-// samplingRate is the probability that Datadog kept a trace with and where it came from.
-type samplingRate struct {
-	probability float64
-	source      rateSource
-}
+// rateKeys are the tags that tell the sampling rate of a chunk.
+var rateKeys = [...]string{keyAgentPSR, keyProbabilisticRate, keyKnuthRate, keyRulePSR, keyLimitPSR}
 
-// probability returns the value of a tag when it is a valid sampling probability, in (0, 1].
-func (lookup rateLookup) probability(key string) (float64, bool) {
-	p, ok := lookup(key)
-	return p, ok && p > 0 && p <= 1
-}
+// rateTags are the sampling tags of a chunk, with the first valid probability (in (0, 1]) of each. The tags are spread
+// over the spans of a chunk, and a tracer can put them on different spans, like the Knuth rate on the first span of
+// a chunk and the rule and limiter rates on the root. So a chunk has one rate, built from all of them.
+type rateTags map[string]float64
 
-// rate reads the sampling probability from tags. It prefers the exact `_dd.agent_psr` or `_dd.prob_sr`, then
-// `_dd.p.ksr`, then `_dd.rule_psr` times `_dd.limit_psr`.
-func (lookup rateLookup) rate() (samplingRate, bool) {
-	if p, ok := lookup.probability(keyAgentPSR); ok {
-		return samplingRate{p, sourceAgent}, true
-	}
-	if p, ok := lookup.probability(keyProbabilisticRate); ok {
-		return samplingRate{p, sourceAgent}, true
-	}
-	if p, ok := lookup.probability(keyKnuthRate); ok {
-		return samplingRate{p, sourceKnuth}, true
-	}
-	if rule, ok := lookup.probability(keyRulePSR); ok {
-		limit, ok := lookup.probability(keyLimitPSR)
-		if !ok {
-			limit = 1
+func (t rateTags) collect(lookup rateLookup) {
+	for _, key := range rateKeys {
+		if _, ok := t[key]; ok {
+			continue
 		}
-		return samplingRate{rule * limit, sourceRule}, true
-	}
-	return samplingRate{}, false
-}
-
-// bestRate collects the most exact sampling rate of the tags in a chunk. The tags are spread over the spans of a chunk,
-// so a chunk has one rate, which is the most exact one of any of them.
-type bestRate struct {
-	rate samplingRate
-}
-
-func (b *bestRate) consider(lookup rateLookup) {
-	if r, ok := lookup.rate(); ok && r.source > b.rate.source {
-		b.rate = r
+		if p, ok := lookup(key); ok && p > 0 && p <= 1 {
+			t[key] = p
+		}
 	}
 }
 
-func (b *bestRate) probability() (float64, bool) {
-	return b.rate.probability, b.rate.source != 0
+// probability returns the probability that Datadog kept the chunk with. It prefers the exact `_dd.agent_psr` or
+// `_dd.prob_sr`, then `_dd.p.ksr`, then `_dd.rule_psr`. The Knuth rate and the rule rate are the rate of the rule
+// alone, and the limiter of the rule also rejects a part of the traces that the rule sampled, so they are multiplied
+// by the rate of the limiter (`_dd.limit_psr`) when there is one.
+func (t rateTags) probability() (float64, bool) {
+	for _, key := range [...]string{keyAgentPSR, keyProbabilisticRate} {
+		if p, ok := t[key]; ok {
+			return p, true
+		}
+	}
+	limit, ok := t[keyLimitPSR]
+	if !ok {
+		limit = 1
+	}
+	for _, key := range [...]string{keyKnuthRate, keyRulePSR} {
+		if p, ok := t[key]; ok {
+			return p * limit, true
+		}
+	}
+	return 0, false
 }
 
 // chunkSamplingRate returns the sampling rate of a chunk in the legacy formats, which send the tags as span metrics,
 // span meta or, in the v0.7 format, as tags of the chunk.
 func chunkSamplingRate(chunk *pb.TraceChunk) (float64, bool) {
-	var best bestRate
-	best.consider(func(key string) (float64, bool) { return parseRate(chunk.GetTags()[key]) })
+	tags := rateTags{}
+	tags.collect(func(key string) (float64, bool) { return parseRate(chunk.GetTags()[key]) })
 	for _, span := range chunk.GetSpans() {
-		best.consider(func(key string) (float64, bool) {
+		tags.collect(func(key string) (float64, bool) {
 			if v, ok := span.Metrics[key]; ok {
 				return v, true
 			}
 			return parseRate(span.Meta[key])
 		})
 	}
-	return best.probability()
+	return tags.probability()
 }
 
 // chunkSamplingRateV1 returns the sampling rate of a chunk in the v1 format, from the attributes of the chunk and of
 // its spans. An attribute can be a number or a string, like the tags of the legacy formats.
 func chunkSamplingRateV1(chunk *idx.InternalTraceChunk) (float64, bool) {
-	var best bestRate
-	best.consider(func(key string) (float64, bool) {
+	tags := rateTags{}
+	tags.collect(func(key string) (float64, bool) {
 		v, ok := chunk.GetAttributeAsString(key)
 		if !ok {
 			return 0, false
@@ -172,9 +153,9 @@ func chunkSamplingRateV1(chunk *idx.InternalTraceChunk) (float64, bool) {
 		return parseRate(v)
 	})
 	for _, span := range chunk.Spans {
-		best.consider(span.GetAttributeAsFloat64)
+		tags.collect(span.GetAttributeAsFloat64)
 	}
-	return best.probability()
+	return tags.probability()
 }
 
 func parseRate(s string) (float64, bool) {

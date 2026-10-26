@@ -89,6 +89,26 @@ func TestToTracesSamplingThreshold(t *testing.T) {
 			want: map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
 		},
 		{
+			name: "the Knuth rate is multiplied by the limiter rate, which can be on another span",
+			chunks: []*pb.TraceChunk{chunk(int32(ddsampler.PriorityUserKeep),
+				&pb.Span{Metrics: map[string]float64{"_dd.rule_psr": 0.5, "_dd.limit_psr": 0.5}, Meta: map[string]string{"_dd.p.dm": "-3"}},
+				&pb.Span{Meta: map[string]string{"_dd.p.ksr": "0.5"}})},
+			want: map[uint64]string{1: "ot=th:c", 2: "ot=th:c"},
+		},
+		{
+			name: "the Knuth rate is not multiplied by the limit of a tracer that sets the configured limit",
+			chunks: []*pb.TraceChunk{chunk(int32(ddsampler.PriorityUserKeep),
+				&pb.Span{Metrics: map[string]float64{"_dd.rule_psr": 0.5, "_dd.limit_psr": 100}, Meta: map[string]string{"_dd.p.dm": "-3"}},
+				&pb.Span{Meta: map[string]string{"_dd.p.ksr": "0.5"}})},
+			want: map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
+		},
+		{
+			name: "the agent rate is not multiplied by a limiter rate",
+			chunks: []*pb.TraceChunk{chunk(keep,
+				&pb.Span{Metrics: map[string]float64{"_dd.agent_psr": 0.5, "_dd.limit_psr": 0.5}}, &pb.Span{})},
+			want: map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
+		},
+		{
 			name: "a rate of 1 keeps everything",
 			chunks: []*pb.TraceChunk{chunk(keep,
 				&pb.Span{Metrics: map[string]float64{"_dd.agent_psr": 1}},

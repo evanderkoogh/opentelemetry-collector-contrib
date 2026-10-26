@@ -162,9 +162,11 @@ because of an error) and chunks without a priority were not decided by a rate, s
 
 This applies to all trace endpoints, including the v1 format. The rate is read from the tags that Datadog puts on the
 spans of a chunk (in the v1 format also from the attributes of the chunk), in this order: `_dd.agent_psr` or
-`_dd.prob_sr` (the rate of the probabilistic sampler of the Agent), `_dd.p.ksr`, and `_dd.rule_psr` multiplied by
-`_dd.limit_psr`. A `_dd.limit_psr` above 1 is not a rate, and is ignored. Every chunk of a trace that is flushed in
-parts is handled by itself.
+`_dd.prob_sr` (the rate of the probabilistic sampler of the Agent), `_dd.p.ksr`, and `_dd.rule_psr`. The last two are
+the rate of a sampling rule alone, and the rate limiter of the rule also rejects some of the traces that the rule
+sampled, so they are multiplied by the rate of the limiter (`_dd.limit_psr`) when there is one. A `_dd.limit_psr` above
+1 is not a rate, and is ignored. The tags can be on different spans of a chunk, so the rate is built from all of them.
+Every chunk of a trace that is flushed in parts is handled by itself.
 
 If the tracestate of a span already has a threshold, it is the probability of the earlier sampling stages. The rate of
 Datadog is then multiplied with it, as the

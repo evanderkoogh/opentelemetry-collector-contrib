@@ -168,6 +168,22 @@ func TestToTracesV1SamplingThreshold(t *testing.T) {
 			want:      map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
 		},
 		{
+			name:      "the Knuth rate is multiplied by the limiter rate, which can be on another span",
+			priority:  int32(ddsampler.PriorityUserKeep),
+			mechanism: 3,
+			root:      attrs{numbers: map[string]float64{"_dd.rule_psr": 0.5, "_dd.limit_psr": 0.5}},
+			child:     attrs{strings: map[string]string{"_dd.p.ksr": "0.5"}},
+			want:      map[uint64]string{1: "ot=th:c", 2: "ot=th:c"},
+		},
+		{
+			name:      "the Knuth rate is not multiplied by the limit of a tracer that sets the configured limit",
+			priority:  int32(ddsampler.PriorityUserKeep),
+			mechanism: 3,
+			root:      attrs{numbers: map[string]float64{"_dd.rule_psr": 0.5, "_dd.limit_psr": 100}},
+			child:     attrs{strings: map[string]string{"_dd.p.ksr": "0.5"}},
+			want:      map[uint64]string{1: "ot=th:8", 2: "ot=th:8"},
+		},
+		{
 			name:      "a manual keep is not decided by a rate, even when it has one",
 			priority:  int32(ddsampler.PriorityUserKeep),
 			mechanism: 4,
