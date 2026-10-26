@@ -54,6 +54,11 @@ func ToTracesV1(logger *zap.Logger, payload *idx.InternalTracerPayload, req *htt
 	groupByService := make(map[string]ptrace.SpanSlice)
 	for _, chunk := range payload.Chunks {
 		traceID := chunkTraceID(chunk)
+		var rate float64
+		var hasRate bool
+		if decidedByRate(float64(chunk.Priority), func() (uint32, bool) { return chunk.SamplingMechanism(), true }) {
+			rate, hasRate = chunkSamplingRateV1(chunk)
+		}
 		for _, span := range chunk.Spans {
 			service := span.Service()
 			// Restore base service name as the service name, like for the older payload formats.
@@ -163,6 +168,10 @@ func ToTracesV1(logger *zap.Logger, payload *idx.InternalTracerPayload, req *htt
 			}
 			// Some spans need specific processing (http, db, grpc...)
 			processSpanByName(spanView{name: span.Name(), resource: span.Resource(), err: errCode, meta: span.GetAttributeAsString}, &newSpan)
+
+			if hasRate {
+				setSamplingThreshold(logger, newSpan, rate)
+			}
 		}
 	}
 

@@ -20,6 +20,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/datadog v0.163.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden v0.163.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest v0.163.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/sampling v0.163.0
 	github.com/stretchr/testify v1.12.1
 	github.com/tinylib/msgp v1.6.4
 	github.com/vmihailenco/msgpack/v5 v5.4.1
